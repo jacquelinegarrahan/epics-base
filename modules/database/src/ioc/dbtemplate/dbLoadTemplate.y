@@ -34,6 +34,28 @@ static char *sub_locals;
 static char **vars = NULL;
 static char *db_file_name = NULL;
 static int var_count, sub_count;
+static size_t sub_collect_size;   /* capacity of the sub_collect buffer */
+static int sub_overflow;          /* set once an append has been rejected */
+
+/* Bounded append into sub_collect (via the moving sub_locals pointer).
+ * The individual variable names and values come from the substitution file
+ * and the command-line macro string and are not otherwise length limited, so
+ * an unchecked strcat could overflow the fixed sub_collect allocation. */
+static void sub_append(const char *s)
+{
+    size_t used, len;
+    if (!sub_collect || sub_overflow)
+        return;
+    used = strlen(sub_collect);
+    len = strlen(s);
+    if (used + len + 1 > sub_collect_size) {
+        fprintf(stderr, "dbLoadTemplate: substitution too long near line %d; "
+            "increase dbTemplateMaxVars\n", line_num);
+        sub_overflow = 1;
+        return;
+    }
+    strcat(sub_locals, s);
+}
 
 /* We allocate MAX_VAR_FACTOR chars in the sub_collect string for each
  * "variable=value," segment, and will accept at most dbTemplateMaxVars
@@ -182,7 +204,7 @@ pattern_definition: global_definitions
         fprintf(stderr, "pattern_definition: pattern_values empty\n");
         fprintf(stderr, "    dbLoadRecords(%s)\n", sub_collect+1);
     #endif
-        if(msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
+        if(sub_overflow || msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
     }
     | O_BRACE pattern_values C_BRACE
     {
@@ -190,7 +212,7 @@ pattern_definition: global_definitions
         fprintf(stderr, "pattern_definition:\n");
         fprintf(stderr, "    dbLoadRecords(%s)\n", sub_collect+1);
     #endif
-        if(msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
+        if(sub_overflow || msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
         *sub_locals = '\0';
         sub_count = 0;
     }
@@ -205,7 +227,7 @@ pattern_definition: global_definitions
         fprintf(stderr, "pattern_definition:\n");
         fprintf(stderr, "    dbLoadRecords(%s)\n", sub_collect+1);
     #endif
-        if(msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
+        if(sub_overflow || msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
         dbmfFree($1);
         *sub_locals = '\0';
         sub_count = 0;
@@ -223,11 +245,11 @@ pattern_value: QUOTE
         fprintf(stderr, "pattern_value: [%d] = \"%s\"\n", sub_count, $1);
     #endif
         if (sub_count < var_count) {
-            strcat(sub_locals, ",");
-            strcat(sub_locals, vars[sub_count]);
-            strcat(sub_locals, "=\"");
-            strcat(sub_locals, $1);
-            strcat(sub_locals, "\"");
+            sub_append(",");
+            sub_append(vars[sub_count]);
+            sub_append("=\"");
+            sub_append($1);
+            sub_append("\"");
             sub_count++;
         } else {
             fprintf(stderr, "dbLoadTemplate: Too many values given, line %d.\n",
@@ -241,10 +263,10 @@ pattern_value: QUOTE
         fprintf(stderr, "pattern_value: [%d] = %s\n", sub_count, $1);
     #endif
         if (sub_count < var_count) {
-            strcat(sub_locals, ",");
-            strcat(sub_locals, vars[sub_count]);
-            strcat(sub_locals, "=");
-            strcat(sub_locals, $1);
+            sub_append(",");
+            sub_append(vars[sub_count]);
+            sub_append("=");
+            sub_append($1);
             sub_count++;
         } else {
             fprintf(stderr, "dbLoadTemplate: Too many values given, line %d.\n",
@@ -265,7 +287,7 @@ variable_substitution: global_definitions
         fprintf(stderr, "variable_substitution: variable_definitions empty\n");
         fprintf(stderr, "    dbLoadRecords(%s)\n", sub_collect+1);
     #endif
-        if(msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
+        if(sub_overflow || msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
     }
     | O_BRACE variable_definitions C_BRACE
     {
@@ -273,7 +295,7 @@ variable_substitution: global_definitions
         fprintf(stderr, "variable_substitution:\n");
         fprintf(stderr, "    dbLoadRecords(%s)\n", sub_collect+1);
     #endif
-        if(msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
+        if(sub_overflow || msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
         *sub_locals = '\0';
     }
     | WORD O_BRACE variable_definitions C_BRACE
@@ -287,7 +309,7 @@ variable_substitution: global_definitions
         fprintf(stderr, "variable_substitution:\n");
         fprintf(stderr, "    dbLoadRecords(%s)\n", sub_collect+1);
     #endif
-        if(msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
+        if(sub_overflow || msiLoadRecords(db_file_name, sub_collect+1)) YYABORT;
         dbmfFree($1);
         *sub_locals = '\0';
     }
@@ -303,10 +325,10 @@ variable_definition: WORD EQUALS WORD
     #ifdef ERROR_STUFF
         fprintf(stderr, "variable_definition: %s = %s\n", $1, $3);
     #endif
-        strcat(sub_locals, ",");
-        strcat(sub_locals, $1);
-        strcat(sub_locals, "=");
-        strcat(sub_locals, $3);
+        sub_append(",");
+        sub_append($1);
+        sub_append("=");
+        sub_append($3);
         dbmfFree($1); dbmfFree($3);
     }
     | WORD EQUALS QUOTE
@@ -314,11 +336,11 @@ variable_definition: WORD EQUALS WORD
     #ifdef ERROR_STUFF
         fprintf(stderr, "variable_definition: %s = \"%s\"\n", $1, $3);
     #endif
-        strcat(sub_locals, ",");
-        strcat(sub_locals, $1);
-        strcat(sub_locals, "=\"");
-        strcat(sub_locals, $3);
-        strcat(sub_locals, "\"");
+        sub_append(",");
+        sub_append($1);
+        sub_append("=\"");
+        sub_append($3);
+        sub_append("\"");
         dbmfFree($1); dbmfFree($3);
     }
     ;
@@ -374,7 +396,9 @@ int dbLoadTemplate(const char *sub_file, const char *cmd_collect, const char *pa
     }
 
     vars = malloc(dbTemplateMaxVars * sizeof(char*));
-    sub_collect = malloc(dbTemplateMaxVars * MAX_VAR_FACTOR);
+    sub_collect_size = (size_t)dbTemplateMaxVars * MAX_VAR_FACTOR;
+    sub_collect = malloc(sub_collect_size);
+    sub_overflow = 0;
     if (!vars || !sub_collect) {
         free(vars);
         free(sub_collect);
@@ -385,6 +409,14 @@ int dbLoadTemplate(const char *sub_file, const char *cmd_collect, const char *pa
     strcpy(sub_collect, ",");
 
     if (cmd_collect && *cmd_collect) {
+        if (strlen(cmd_collect) + 2 > sub_collect_size) {
+            fprintf(stderr, "dbLoadTemplate: macro string too long; "
+                "increase dbTemplateMaxVars\n");
+            free(vars);
+            free(sub_collect);
+            fclose(fp);
+            return -1;
+        }
         strcat(sub_collect, cmd_collect);
         sub_locals = sub_collect + strlen(sub_collect);
     } else {

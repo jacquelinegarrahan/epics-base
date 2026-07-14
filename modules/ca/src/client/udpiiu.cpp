@@ -812,10 +812,14 @@ bool udpiiu::exceptionRespAction (
     currentTime.strftime ( date, sizeof ( date ), "%a %b %d %Y %H:%M:%S");
 
     if ( msg.m_postsize > sizeof ( caHdr ) ){
+        // the context string comes from the wire and may not be NUL
+        // terminated within the payload; bound the %s to the bytes actually
+        // present after the embedded request header
+        int ctxLen = (int) ( msg.m_postsize - sizeof ( caHdr ) );
         errlogPrintf (
-            ERL_ERROR " condition \"%s\" detected by %s with context \"%s\" at %s\n",
+            ERL_ERROR " condition \"%s\" detected by %s with context \"%.*s\" at %s\n",
             ca_message ( msg.m_available ),
-            name, reinterpret_cast <const char *> ( &reqMsg + 1 ), date );
+            name, ctxLen, reinterpret_cast <const char *> ( &reqMsg + 1 ), date );
     }
     else{
         errlogPrintf (

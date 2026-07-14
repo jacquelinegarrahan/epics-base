@@ -583,6 +583,11 @@ arrayElementCount   num         /* number of values     */
     pDest->status           = dbr_ntohs(pSrc->status);
     pDest->severity         = dbr_ntohs(pSrc->severity);
     pDest->no_str           = dbr_ntohs(pSrc->no_str);
+    /* the strs array has only MAX_ENUM_STATES entries; a hostile server can
+       supply a larger no_str, so clamp it to prevent out-of-bounds access by
+       consumers that iterate over strs[0..no_str-1] */
+    if ( pDest->no_str > MAX_ENUM_STATES )
+        pDest->no_str = MAX_ENUM_STATES;
     if ( s != d ) {
         memcpy(pDest->strs, pSrc->strs, sizeof(pSrc->strs));
     }
@@ -1003,6 +1008,11 @@ arrayElementCount   num         /* number of values     */
     pDest->status           = dbr_ntohs(pSrc->status);
     pDest->severity         = dbr_ntohs(pSrc->severity);
     pDest->no_str           = dbr_ntohs(pSrc->no_str);
+    /* the strs array has only MAX_ENUM_STATES entries; a hostile server can
+       supply a larger no_str, so clamp it to prevent out-of-bounds access by
+       consumers that iterate over strs[0..no_str-1] */
+    if ( pDest->no_str > MAX_ENUM_STATES )
+        pDest->no_str = MAX_ENUM_STATES;
     if ( s != d ) {
         memcpy(pDest->strs, pSrc->strs, sizeof(pSrc->strs));
     }

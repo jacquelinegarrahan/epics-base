@@ -85,6 +85,7 @@ private:
     PRecycleFunc pRecycleFunc;
     CASG & sg;
     void * pValue;
+    arrayElementCount count;
     const unsigned magic;
     cacChannel::ioid id;
     bool idIsValid;

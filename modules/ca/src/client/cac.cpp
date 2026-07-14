@@ -56,6 +56,33 @@ static const char pVersionCAC[] =
     "@(#) " EPICS_VERSION_STRING
     ", CA Client Library";
 
+//
+// A data response is framed on m_postsize bytes of payload, but the in-place
+// byte-order conversion (caNetConvert) and the copy-out to the user buffer are
+// driven by the independent wire field m_count.  A malicious or malfunctioning
+// server can send a small payload with a large m_count, causing caNetConvert
+// to read and write far past the receive buffer.  Reject any data response
+// whose declared payload cannot hold m_count elements of m_dataType.  The size
+// is accumulated in 64 bits because dbr_size_n() truncates to 32 bits while the
+// converters loop over the full (untruncated) m_count.
+//
+static bool responsePayloadOK ( const caHdrLargeArray & hdr )
+{
+    if ( INVALID_DB_REQ ( hdr.m_dataType ) ) {
+        return false;
+    }
+    epicsUInt64 need;
+    if ( hdr.m_count <= 1 ) {
+        need = dbr_size[hdr.m_dataType];
+    }
+    else {
+        need = static_cast < epicsUInt64 > ( dbr_size[hdr.m_dataType] )
+             + ( static_cast < epicsUInt64 > ( hdr.m_count ) - 1 )
+               * static_cast < epicsUInt64 > ( dbr_value_size[hdr.m_dataType] );
+    }
+    return need <= hdr.m_postsize;
+}
+
 // TCP response dispatch table
 const cac::pProtoStubTCP cac::tcpJumpTableCAC [] =
 {
@@ -895,6 +922,9 @@ bool cac::readNotifyRespAction ( callbackManager &, tcpiiu & iiu,
             // this does *not* assign a new resource id
             this->ioTable.add ( *pmiu );
         }
+        if ( caStatus == ECA_NORMAL && ! responsePayloadOK ( hdr ) ) {
+            caStatus = ECA_BADCOUNT;
+        }
         if ( caStatus == ECA_NORMAL ) {
             /*
              * convert the data buffer from net
@@ -962,6 +992,9 @@ bool cac::eventRespAction ( callbackManager &, tcpiiu &iiu,
         /*
          * convert the data buffer from net format to host format
          */
+        if ( caStatus == ECA_NORMAL && ! responsePayloadOK ( hdr ) ) {
+            caStatus = ECA_BADCOUNT;
+        }
         if ( caStatus == ECA_NORMAL ) {
             caStatus = caNetConvert (
                 hdr.m_dataType, pMsgBdy, pMsgBdy, false, hdr.m_count );
@@ -991,8 +1024,15 @@ bool cac::readRespAction ( callbackManager &, tcpiiu &,
     // it is in use here.
     //
     if ( pmiu ) {
-        pmiu->completion ( guard, *this,
-            hdr.m_dataType, hdr.m_count, pMsgBdy );
+        if ( responsePayloadOK ( hdr ) ) {
+            pmiu->completion ( guard, *this,
+                hdr.m_dataType, hdr.m_count, pMsgBdy );
+        }
+        else {
+            pmiu->exception ( guard, *this, ECA_BADCOUNT,
+                "read failed - bad element count",
+                hdr.m_dataType, hdr.m_count );
+        }
     }
     return true;
 }
@@ -1107,15 +1147,31 @@ bool cac::exceptionRespAction ( callbackManager & cbMutexIn, tcpiiu & iiu,
     }
 
     // execute the exception message
+    // the table is indexed by the *embedded request* command (req.m_cmmd),
+    // which is attacker-controlled, so the bounds check must test that same
+    // value rather than the (always-in-range) outer header command hdr.m_cmmd
     pExcepProtoStubTCP pStub;
-    if ( hdr.m_cmmd >= NELEMENTS ( cac::tcpExcepJumpTableCAC ) ) {
+    if ( req.m_cmmd >= NELEMENTS ( cac::tcpExcepJumpTableCAC ) ) {
         pStub = &cac::defaultExcep;
     }
     else {
         pStub = cac::tcpExcepJumpTableCAC [req.m_cmmd];
     }
-    const char *pCtx = reinterpret_cast < const char * > ( pLW );
-    return ( this->*pStub ) ( cbMutexIn, iiu, req, pCtx, hdr.m_available );
+    // the context string comes from the wire and is not guaranteed to be
+    // NUL terminated within the payload; bound its length to the bytes that
+    // are actually present and copy it into a NUL-terminated local buffer
+    // before it reaches any %s conversion or user exception callback
+    const char * pCtxRaw = reinterpret_cast < const char * > ( pLW );
+    unsigned ctxAvail = hdr.m_postsize - bytesSoFar;
+    char ctxBuf [512];
+    unsigned ctxLen = 0;
+    while ( ctxLen < ctxAvail && ctxLen < sizeof ( ctxBuf ) - 1
+            && pCtxRaw[ctxLen] != '\0' ) {
+        ctxBuf[ctxLen] = pCtxRaw[ctxLen];
+        ctxLen++;
+    }
+    ctxBuf[ctxLen] = '\0';
+    return ( this->*pStub ) ( cbMutexIn, iiu, req, ctxBuf, hdr.m_available );
 }
 
 bool cac::accessRightsRespAction (

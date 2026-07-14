@@ -311,6 +311,7 @@ char *val2str (const void *v, unsigned type, int index)
 
 #define PRN_DBR_X_ENUM(T)                               \
     n = ((struct T *)value)->no_str;                    \
+    if (n < 0 || n > MAX_ENUM_STATES) n = MAX_ENUM_STATES; \
     PRN_DBR_STS(T);                                     \
     sprintf(str+strlen(str),                            \
                 "\n    Enums:            (%2d)", n);    \

@@ -722,6 +722,35 @@ static int read_notify_action ( caHdrLargeArray *mp, void *pPayload, struct clie
 }
 
 /*
+ * payloadTooSmall()
+ *
+ * A CA data message is framed by the server purely on m_postsize, but the
+ * in-place byte-order conversion and the database put are driven by the
+ * independent wire field m_count.  A malicious peer can send a tiny payload
+ * with a huge m_count, causing caNetConvert()/dbChannel_put() to read and
+ * write far past the receive buffer.  Reject any message whose declared
+ * payload cannot actually hold m_count elements of m_dataType.  The size is
+ * computed in 64 bits because dbr_size_n() truncates to 32 bits while the
+ * converters loop over the full (untruncated) m_count.
+ */
+static int payloadTooSmall ( const caHdrLargeArray *mp )
+{
+    epicsUInt64 need;
+    if ( INVALID_DB_REQ ( mp->m_dataType ) ) {
+        return 1;
+    }
+    if ( mp->m_count <= 1 ) {
+        need = dbr_size[mp->m_dataType];
+    }
+    else {
+        need = (epicsUInt64) dbr_size[mp->m_dataType]
+             + ( (epicsUInt64) mp->m_count - 1 )
+               * (epicsUInt64) dbr_value_size[mp->m_dataType];
+    }
+    return need > (epicsUInt64) mp->m_postsize;
+}
+
+/*
  * write_action()
  */
 static int write_action ( caHdrLargeArray *mp,
@@ -748,6 +777,18 @@ static int write_action ( caHdrLargeArray *mp,
             RECORD_NAME ( pciu->dbch ));
         SEND_UNLOCK(client);
         return RSRV_OK;
+    }
+
+    if ( payloadTooSmall ( mp ) ) {
+        log_header ("invalid element count", client, mp, pPayload, 0);
+        SEND_LOCK(client);
+        send_err(
+            mp,
+            ECA_BADCOUNT,
+            client,
+            RECORD_NAME ( pciu->dbch ));
+        SEND_UNLOCK(client);
+        return RSRV_ERROR;
     }
 
     status = caNetConvert (
@@ -1655,6 +1696,12 @@ static int write_notify_action ( caHdrLargeArray *mp, void *pPayload,
         return RSRV_OK;
     }
 
+    if ( payloadTooSmall ( mp ) ) {
+        log_header ("invalid element count", client, mp, pPayload, 0);
+        putNotifyErrorReply (client, mp, ECA_BADCOUNT);
+        return RSRV_ERROR;
+    }
+
     size = dbr_size_n (mp->m_dataType, mp->m_count);
 
     if ( pciu->pPutNotify ) {
@@ -1767,6 +1814,16 @@ static int event_add_action (caHdrLargeArray *mp, void *pPayload, struct client 
     struct event_ext *pevext;
 
     if ( INVALID_DB_REQ(mp->m_dataType) ) {
+        return RSRV_ERROR;
+    }
+
+    /*
+     * the payload must be large enough to hold the monitor request
+     * (m_mask is read from it below); a short payload would read past
+     * the receive buffer
+     */
+    if ( mp->m_postsize < sizeof ( struct mon_info ) ) {
+        logBadId ( client, mp, pPayload );
         return RSRV_ERROR;
     }
 

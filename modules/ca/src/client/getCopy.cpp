@@ -60,6 +60,11 @@ void getCopy::completion (
     arrayElementCount countIn, const void *pDataIn )
 {
     if ( this->type == typeIn ) {
+        // never copy more elements than the caller's buffer was sized for;
+        // a malicious server can return a larger count than requested
+        if ( countIn > this->count ) {
+            countIn = this->count;
+        }
         unsigned size = dbr_size_n ( typeIn, countIn );
         memcpy ( this->pValue, pDataIn, size );
         this->cacCtx.decrementOutstandingIO ( guard, this->ioSeqNo );

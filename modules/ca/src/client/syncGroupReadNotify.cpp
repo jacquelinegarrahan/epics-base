@@ -29,7 +29,7 @@ syncGroupReadNotify::syncGroupReadNotify (
     CASG & sgIn, PRecycleFunc pRecycleFuncIn,
     chid pChan, void * pValueIn ) :
     chan ( pChan ), pRecycleFunc ( pRecycleFuncIn ),
-    sg ( sgIn ), pValue ( pValueIn ),
+    sg ( sgIn ), pValue ( pValueIn ), count ( 0 ),
     magic ( CASG_MAGIC ), id ( 0u ),
     idIsValid ( false ), ioComplete ( false )
 {
@@ -41,6 +41,7 @@ void syncGroupReadNotify::begin (
 {
     this->chan->eliminateExcessiveSendBacklog ( guard );
     this->ioComplete = false;
+    this->count = count;
     boolFlagManager mgr ( this->idIsValid );
     this->chan->read ( guard, type, count, *this, &this->id );
     mgr.release ();
@@ -89,6 +90,11 @@ void syncGroupReadNotify::completion (
     }
 
     if ( this->pValue ) {
+        // never copy more elements than the caller's buffer was sized for;
+        // a malicious server can return a larger count than requested
+        if ( count > this->count ) {
+            count = this->count;
+        }
         size_t size = dbr_size_n ( type, count );
         memcpy ( this->pValue, pData, size );
     }
