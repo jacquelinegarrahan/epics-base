@@ -228,18 +228,26 @@ static void doPrintf(printfRecord *prec)
 
                 case 's':
                     if (flags & F_LONG) {
-                        long n = vspace + 1;
+                        /* reserve one byte for the terminator written at
+                         * pval[n] below; pval has only vspace+1 usable bytes
+                         * (pval + vspace + 1 == prec->val + sizv), so reading
+                         * vspace+1 chars would push that NUL one past the end */
+                        long n = vspace;
                         long status;
 
                         if (precision && n > precision)
-                            n = precision + 1;
+                            n = precision;
                             /* If set, precision is the maximum number of
                              * characters to be printed from the string.
                              * It does not limit the field width however.
                              */
                         if (dbLinkIsConstant(plink)) {
-                            epicsUInt32 len = n;
-                            status = dbLoadLinkLS(plink++, pval, n, &len);
+                            /* dbLoadLinkLS's size argument includes the NUL
+                             * terminator, so pass n+1 to allow the same n
+                             * characters the DBR_CHAR path below reads; pval
+                             * has vspace+1 usable bytes and n <= vspace */
+                            epicsUInt32 len = n + 1;
+                            status = dbLoadLinkLS(plink++, pval, n + 1, &len);
                             n = len;
                         }
                         else
