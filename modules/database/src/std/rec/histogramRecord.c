@@ -342,6 +342,11 @@ static long add_count(histogramRecord *prec)
         if (temp <= (double) i * prec->wdth)
             break;
     }
+    /* wdth is a rounded quotient of (ulim-llim)/nelm, so nelm*wdth can be
+       slightly less than (ulim-llim); a sgnl just below ulim then leaves the
+       loop with i == nelm+1, which would index bptr one element past its end */
+    if (i > prec->nelm)
+        i = prec->nelm;
     pdest = prec->bptr + i - 1;
     if (*pdest == (epicsUInt32) UINT_MAX)
         *pdest = 0;
